@@ -18,6 +18,7 @@ import (
 var (
 	cfg           Config
 	cfgFile       = "/opt/disposition/disposition.yml"
+	// amoeba speak
 	poolingOption = flag.String("pooling-option", "push", "which method should be invoked (push / pull / restore)")
 	restorePath   = flag.String("restore-to", "/tmp/disposition", "restoration dir")
 )
@@ -114,16 +115,17 @@ func init() {
 	}
 }
 
+// if there are updated or new files - encrypt, update state and sync remote
 func push() {
 	glog.V(2).Infoln("state init")
 	storage, err := sqlite.New(cfg.Secret.State)
 	if err != nil {
-		glog.Fatalf("main | sqlite.New [%s]", err)
+		glog.Fatalf("push | sqlite.New [%s]", err)
 	}
 
 	storedFiles, err := storage.Files()
 	if err != nil {
-		glog.Fatalf("main | storage.Files [%s]", err)
+		glog.Fatalf("push | storage.Files [%s]", err)
 	}
 
 	scannedFiles := scanLocalFiles(cfg.Root.Plain)
@@ -138,23 +140,23 @@ func push() {
 
 			UUIDs, err := storage.UUIDs()
 			if err != nil {
-				glog.Fatalf("main | storage.UUIDs [%s]", err)
+				glog.Fatalf("push | storage.UUIDs [%s]", err)
 			}
 
 			obfuscated := newUnique(UUIDs)
 			err = crypto.Encrypt([]byte(cfg.Secret.Key), scannedFile, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, obfuscated))
 			if err != nil {
-				glog.Fatalf("main | crypto.Encrypt [%s]", err)
+				glog.Fatalf("push | crypto.Encrypt [%s]", err)
 			}
 
 			md5sum, err := crypto.MD5(scannedFile)
 			if err != nil {
-				glog.Fatalf("main | crypto.MD5 [%s]", err)
+				glog.Fatalf("push | crypto.MD5 [%s]", err)
 			}
 
 			err = storage.Add(scannedFile, md5sum, obfuscated)
 			if err != nil {
-				glog.Fatalf("main | storage.Add [%s]", err)
+				glog.Fatalf("push | storage.Add [%s]", err)
 			}
 
 			syncRequired = true
@@ -163,22 +165,22 @@ func push() {
 				glog.Infof("updated [%s]", scannedFile)
 				obfuscated, err := storage.Obfuscated(scannedFile)
 				if err != nil {
-					glog.Fatalf("main | storage.Obfuscated [%s]", err)
+					glog.Fatalf("push | storage.Obfuscated [%s]", err)
 				}
 
 				err = crypto.Encrypt([]byte(cfg.Secret.Key), scannedFile, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, obfuscated))
 				if err != nil {
-					glog.Fatalf("main | crypto.Encrypt [%s]", err)
+					glog.Fatalf("push | crypto.Encrypt [%s]", err)
 				}
 
 				md5sum, err := crypto.MD5(scannedFile)
 				if err != nil {
-					glog.Fatalf("main | crypto.MD5 [%s]", err)
+					glog.Fatalf("push | crypto.MD5 [%s]", err)
 				}
 
 				err = storage.Update(scannedFile, md5sum)
 				if err != nil {
-					glog.Fatalf("main | storage.Update [%s]", err)
+					glog.Fatalf("push | storage.Update [%s]", err)
 				}
 				syncRequired = true
 			}
@@ -189,26 +191,27 @@ func push() {
 	if syncRequired {
 		err := crypto.Encrypt([]byte(cfg.Secret.Key), cfg.Secret.State, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, cfg.Secret.Obfuscated))
 		if err != nil {
-			glog.Fatalf("main | crypto.Encrypt [%s]", err)
+			glog.Fatalf("push | crypto.Encrypt [%s]", err)
 		}
 
 		err = repo.Push(cfg.Root.Encrypted)
 		if err != nil {
-			glog.Fatalf("main | repo.Push [%s]", err)
+			glog.Fatalf("push | repo.Push [%s]", err)
 		}
 	}
 
 	glog.V(2).Infoln("state close")
 	err = storage.Close()
 	if err != nil {
-		glog.Fatalf("main | storage.Close [%s]", err)
+		glog.Fatalf("push | storage.Close [%s]", err)
 	}
 }
 
+// if there are changes on remote - decrypt and update state
 func pull() {
 	synced, err := repo.Pull(cfg.Root.Encrypted)
 	if err != nil {
-		glog.Fatalf("main | repo.Pull [%s]", err)
+		glog.Fatalf("pull | repo.Pull [%s]", err)
 	}
 
 	if !synced {
@@ -222,30 +225,30 @@ func pull() {
 		glog.V(2).Infoln("state init")
 		storage, err := sqlite.New(cfg.Secret.State)
 		if err != nil {
-			glog.Fatalf("main | sqlite.New [%s]", err)
+			glog.Fatalf("pull | sqlite.New [%s]", err)
 		}
 
 		ff, err := storage.Files()
 		if err != nil {
-			glog.Fatalf("main | storage.Files [%s]", err)
+			glog.Fatalf("pull | storage.Files [%s]", err)
 		}
 
 		for _, f := range ff {
 			if _, err := os.Stat(f.Name); os.IsNotExist(err) {
 				err = crypto.Decrypt([]byte(cfg.Secret.Key), f.Name, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, f.Obfuscated))
 				if err != nil {
-					glog.Fatalf("main | crypto.Decrypt [%s]", err)
+					glog.Fatalf("pull | crypto.Decrypt [%s]", err)
 				}
 			}
 
 			md5sum, err := crypto.MD5(f.Name)
 			if err != nil {
-				glog.Fatalf("main | crypto.MD5 [%s]", err)
+				glog.Fatalf("pull | crypto.MD5 [%s]", err)
 			}
 			if f.MD5 != md5sum {
 				err = crypto.Decrypt([]byte(cfg.Secret.Key), f.Name, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, f.Obfuscated))
 				if err != nil {
-					glog.Fatalf("main | crypto.Decrypt [%s]", err)
+					glog.Fatalf("pull | crypto.Decrypt [%s]", err)
 				}
 			}
 		}
@@ -253,13 +256,15 @@ func pull() {
 		glog.V(2).Infoln("state close")
 		err = storage.Close()
 		if err != nil {
-			glog.Fatalf("main | storage.Close [%s]", err)
+			glog.Fatalf("pull | storage.Close [%s]", err)
 		}
 	} else {
 		glog.Infoln("remote unchanged")
 	}
 }
 
+// completely restore and decrypt repo and initialize state
+// only secret.key and secret.obfuscated required
 func restore() {
 	for _, dir := range []string{
 		*restorePath,
@@ -286,12 +291,12 @@ func restore() {
 	glog.V(2).Infoln("state init")
 	storage, err := sqlite.New(store)
 	if err != nil {
-		glog.Fatalf("main | sqlite.New [%s]", err)
+		glog.Fatalf("restore | sqlite.New [%s]", err)
 	}
 
 	storedFiles, err := storage.Files()
 	if err != nil {
-		glog.Fatalf("main | storage.Files [%s]", err)
+		glog.Fatalf("restore | storage.Files [%s]", err)
 	}
 
 	for _, storedFile := range storedFiles {
@@ -308,7 +313,7 @@ func restore() {
 	glog.V(2).Infoln("state close")
 	err = storage.Close()
 	if err != nil {
-		glog.Fatalf("main | storage.Close [%s]", err)
+		glog.Fatalf("restore | storage.Close [%s]", err)
 	}
 }
 
