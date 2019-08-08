@@ -252,40 +252,45 @@ func main() {
 		}
 
 		if *poolingOption == "pull" {
-			obfuscatedFiles, stateChanged, err := repo.Pull(cfg.Root.Encrypted, cfg.Secret.Obfuscated)
+			synced, err := repo.Pull(cfg.Root.Encrypted)
 			if err != nil {
 				glog.Fatalf("main | repo.Pull [%s]", err)
 			}
-			fmt.Printf("obfuscatedFiles: %s\n", obfuscatedFiles)
-			fmt.Printf("stateChanged: %v\n", stateChanged)
 
-			if stateChanged {
-				err = storage.Close()
-				if err != nil {
-					glog.Fatalf("main | storage.Close [%s]", err)
-				}
-
-				err = crypto.Decrypt([]byte(cfg.Secret.Key), cfg.Secret.State, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, cfg.Secret.Obfuscated))
-				if err != nil {
-					glog.Fatalf("main | crypto.Decrypt [%s]", err)
-				}
+			if !synced {
+				glog.Infoln("remote updated")
 
 				storage, err = sqlite.New(cfg.Secret.State)
 				if err != nil {
 					glog.Fatalf("main | sqlite.New [%s]", err)
 				}
-			}
 
-			for _, obfuscatedFile := range obfuscatedFiles {
-				filePlain, err := storage.Name(obfuscatedFile)
+				ff, err := storage.Files()
 				if err != nil {
-					glog.Fatalf("main | storage.Name [%s]", err)
+					glog.Fatalf("main | storage.Files [%s]", err)
 				}
 
-				err = crypto.Decrypt([]byte(cfg.Secret.Key), filePlain, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, obfuscatedFile))
-				if err != nil {
-					glog.Fatalf("main | crypto.Decrypt [%s]", err)
+				for _, f := range ff {
+					if _, err := os.Stat(f.Name); os.IsNotExist(err) {
+						err = crypto.Decrypt([]byte(cfg.Secret.Key), f.Name, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, f.Obfuscated))
+						if err != nil {
+							glog.Fatalf("main | crypto.Decrypt [%s]", err)
+						}
+					}
+
+					md5sum, err := crypto.MD5(f.Name)
+					if err != nil {
+						glog.Fatalf("main | crypto.MD5 [%s]", err)
+					}
+					if f.MD5 != md5sum {
+						err = crypto.Decrypt([]byte(cfg.Secret.Key), f.Name, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, f.Obfuscated))
+						if err != nil {
+							glog.Fatalf("main | crypto.Decrypt [%s]", err)
+						}
+					}
 				}
+			} else {
+				glog.Infoln("remote unchanged")
 			}
 		}
 
