@@ -114,49 +114,139 @@ func init() {
 	}
 }
 
-func main() {
-	if *poolingOption == "restore" {
-		for _, dir := range []string{
-			*restorePath,
-			fmt.Sprintf("%s/remote", *restorePath),
-			fmt.Sprintf("%s/plain", *restorePath),
-			fmt.Sprintf("%s/remote/.git", *restorePath),
-		} {
-			if _, err := os.Stat(dir); os.IsNotExist(err) {
-				glog.Fatalf("restore req missing [%s]", dir)
+func push() {
+	glog.V(2).Infoln("state init")
+	storage, err := sqlite.New(cfg.Secret.State)
+	if err != nil {
+		glog.Fatalf("main | sqlite.New [%s]", err)
+	}
+
+	storedFiles, err := storage.Files()
+	if err != nil {
+		glog.Fatalf("main | storage.Files [%s]", err)
+	}
+
+	scannedFiles := scanLocalFiles(cfg.Root.Plain)
+	glog.Infof("files tracked [%d]", len(storedFiles))
+	glog.Infof("files scanned [%d]", len(scannedFiles))
+
+	var syncRequired bool
+	for _, scannedFile := range scannedFiles {
+		tracked, updated := checkFile(scannedFile, storedFiles)
+		if !tracked {
+			glog.Infof("new file [%s]", scannedFile)
+
+			UUIDs, err := storage.UUIDs()
+			if err != nil {
+				glog.Fatalf("main | storage.UUIDs [%s]", err)
+			}
+
+			obfuscated := newUnique(UUIDs)
+			err = crypto.Encrypt([]byte(cfg.Secret.Key), scannedFile, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, obfuscated))
+			if err != nil {
+				glog.Fatalf("main | crypto.Encrypt [%s]", err)
+			}
+
+			md5sum, err := crypto.MD5(scannedFile)
+			if err != nil {
+				glog.Fatalf("main | crypto.MD5 [%s]", err)
+			}
+
+			err = storage.Add(scannedFile, md5sum, obfuscated)
+			if err != nil {
+				glog.Fatalf("main | storage.Add [%s]", err)
+			}
+
+			syncRequired = true
+		} else {
+			if updated {
+				glog.Infof("updated [%s]", scannedFile)
+				obfuscated, err := storage.Obfuscated(scannedFile)
+				if err != nil {
+					glog.Fatalf("main | storage.Obfuscated [%s]", err)
+				}
+
+				err = crypto.Encrypt([]byte(cfg.Secret.Key), scannedFile, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, obfuscated))
+				if err != nil {
+					glog.Fatalf("main | crypto.Encrypt [%s]", err)
+				}
+
+				md5sum, err := crypto.MD5(scannedFile)
+				if err != nil {
+					glog.Fatalf("main | crypto.MD5 [%s]", err)
+				}
+
+				err = storage.Update(scannedFile, md5sum)
+				if err != nil {
+					glog.Fatalf("main | storage.Update [%s]", err)
+				}
+				syncRequired = true
 			}
 		}
+	}
 
-		glog.Info("store decrypt")
-		store := fmt.Sprintf("%s/%s", *restorePath, "disposition-state.db")
-		err := crypto.Decrypt(
-			[]byte(cfg.Secret.Key),
-			store,
-			fmt.Sprintf("%s/%s/%s", *restorePath, "remote", cfg.Secret.Obfuscated),
-		)
+	glog.Infof("sync required [%v]", syncRequired)
+	if syncRequired {
+		err := crypto.Encrypt([]byte(cfg.Secret.Key), cfg.Secret.State, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, cfg.Secret.Obfuscated))
+		if err != nil {
+			glog.Fatalf("main | crypto.Encrypt [%s]", err)
+		}
+
+		err = repo.Push(cfg.Root.Encrypted)
+		if err != nil {
+			glog.Fatalf("main | repo.Push [%s]", err)
+		}
+	}
+
+	glog.V(2).Infoln("state close")
+	err = storage.Close()
+	if err != nil {
+		glog.Fatalf("main | storage.Close [%s]", err)
+	}
+}
+
+func pull() {
+	synced, err := repo.Pull(cfg.Root.Encrypted)
+	if err != nil {
+		glog.Fatalf("main | repo.Pull [%s]", err)
+	}
+
+	if !synced {
+		glog.Infoln("remote updated")
+
+		err = crypto.Decrypt([]byte(cfg.Secret.Key), cfg.Secret.State, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, cfg.Secret.Obfuscated))
 		if err != nil {
 			glog.Fatalln("failed to decrypt state")
 		}
 
 		glog.V(2).Infoln("state init")
-		storage, err := sqlite.New(store)
+		storage, err := sqlite.New(cfg.Secret.State)
 		if err != nil {
 			glog.Fatalf("main | sqlite.New [%s]", err)
 		}
 
-		storedFiles, err := storage.Files()
+		ff, err := storage.Files()
 		if err != nil {
 			glog.Fatalf("main | storage.Files [%s]", err)
 		}
 
-		for _, storedFile := range storedFiles {
-			err = crypto.Decrypt(
-				[]byte(cfg.Secret.Key),
-				fmt.Sprintf("%s/%s/%s", *restorePath, "plain", storedFile.Name[1:]),
-				fmt.Sprintf("%s/%s/%s", *restorePath, "remote", storedFile.Obfuscated),
-			)
+		for _, f := range ff {
+			if _, err := os.Stat(f.Name); os.IsNotExist(err) {
+				err = crypto.Decrypt([]byte(cfg.Secret.Key), f.Name, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, f.Obfuscated))
+				if err != nil {
+					glog.Fatalf("main | crypto.Decrypt [%s]", err)
+				}
+			}
+
+			md5sum, err := crypto.MD5(f.Name)
 			if err != nil {
-				glog.Infof("failed to decrypt [%s -> %s]", storedFile.Obfuscated, storedFile.Name)
+				glog.Fatalf("main | crypto.MD5 [%s]", err)
+			}
+			if f.MD5 != md5sum {
+				err = crypto.Decrypt([]byte(cfg.Secret.Key), f.Name, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, f.Obfuscated))
+				if err != nil {
+					glog.Fatalf("main | crypto.Decrypt [%s]", err)
+				}
 			}
 		}
 
@@ -166,138 +256,69 @@ func main() {
 			glog.Fatalf("main | storage.Close [%s]", err)
 		}
 	} else {
-		glog.V(2).Infoln("state init")
-		storage, err := sqlite.New(cfg.Secret.State)
+		glog.Infoln("remote unchanged")
+	}
+}
+
+func restore() {
+	for _, dir := range []string{
+		*restorePath,
+		fmt.Sprintf("%s/remote", *restorePath),
+		fmt.Sprintf("%s/plain", *restorePath),
+		fmt.Sprintf("%s/remote/.git", *restorePath),
+	} {
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			glog.Fatalf("restore req missing [%s]", dir)
+		}
+	}
+
+	glog.Info("store decrypt")
+	store := fmt.Sprintf("%s/%s", *restorePath, "disposition-state.db")
+	err := crypto.Decrypt(
+		[]byte(cfg.Secret.Key),
+		store,
+		fmt.Sprintf("%s/%s/%s", *restorePath, "remote", cfg.Secret.Obfuscated),
+	)
+	if err != nil {
+		glog.Fatalln("failed to decrypt state")
+	}
+
+	glog.V(2).Infoln("state init")
+	storage, err := sqlite.New(store)
+	if err != nil {
+		glog.Fatalf("main | sqlite.New [%s]", err)
+	}
+
+	storedFiles, err := storage.Files()
+	if err != nil {
+		glog.Fatalf("main | storage.Files [%s]", err)
+	}
+
+	for _, storedFile := range storedFiles {
+		err = crypto.Decrypt(
+			[]byte(cfg.Secret.Key),
+			fmt.Sprintf("%s/%s/%s", *restorePath, "plain", storedFile.Name[1:]),
+			fmt.Sprintf("%s/%s/%s", *restorePath, "remote", storedFile.Obfuscated),
+		)
 		if err != nil {
-			glog.Fatalf("main | sqlite.New [%s]", err)
+			glog.Infof("failed to decrypt [%s -> %s]", storedFile.Obfuscated, storedFile.Name)
 		}
+	}
 
-		if *poolingOption == "push" {
-			storedFiles, err := storage.Files()
-			if err != nil {
-				glog.Fatalf("main | storage.Files [%s]", err)
-			}
+	glog.V(2).Infoln("state close")
+	err = storage.Close()
+	if err != nil {
+		glog.Fatalf("main | storage.Close [%s]", err)
+	}
+}
 
-			scannedFiles := scanLocalFiles(cfg.Root.Plain)
-			glog.Infof("files tracked [%d]", len(storedFiles))
-			glog.Infof("files scanned [%d]", len(scannedFiles))
-
-			var syncRequired bool
-			for _, scannedFile := range scannedFiles {
-				tracked, updated := checkFile(scannedFile, storedFiles)
-				if !tracked {
-					glog.Infof("new file [%s]", scannedFile)
-
-					UUIDs, err := storage.UUIDs()
-					if err != nil {
-						glog.Fatalf("main | storage.UUIDs [%s]", err)
-					}
-
-					obfuscated := newUnique(UUIDs)
-					err = crypto.Encrypt([]byte(cfg.Secret.Key), scannedFile, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, obfuscated))
-					if err != nil {
-						glog.Fatalf("main | crypto.Encrypt [%s]", err)
-					}
-
-					md5sum, err := crypto.MD5(scannedFile)
-					if err != nil {
-						glog.Fatalf("main | crypto.MD5 [%s]", err)
-					}
-
-					err = storage.Add(scannedFile, md5sum, obfuscated)
-					if err != nil {
-						glog.Fatalf("main | storage.Add [%s]", err)
-					}
-
-					syncRequired = true
-				} else {
-					if updated {
-						glog.Infof("updated [%s]", scannedFile)
-						obfuscated, err := storage.Obfuscated(scannedFile)
-						if err != nil {
-							glog.Fatalf("main | storage.Obfuscated [%s]", err)
-						}
-
-						err = crypto.Encrypt([]byte(cfg.Secret.Key), scannedFile, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, obfuscated))
-						if err != nil {
-							glog.Fatalf("main | crypto.Encrypt [%s]", err)
-						}
-
-						md5sum, err := crypto.MD5(scannedFile)
-						if err != nil {
-							glog.Fatalf("main | crypto.MD5 [%s]", err)
-						}
-
-						err = storage.Update(scannedFile, md5sum)
-						if err != nil {
-							glog.Fatalf("main | storage.Update [%s]", err)
-						}
-						syncRequired = true
-					}
-				}
-			}
-
-			glog.Infof("sync required [%v]", syncRequired)
-			if syncRequired {
-				err := crypto.Encrypt([]byte(cfg.Secret.Key), cfg.Secret.State, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, cfg.Secret.Obfuscated))
-				if err != nil {
-					glog.Fatalf("main | crypto.Encrypt [%s]", err)
-				}
-
-				err = repo.Push(cfg.Root.Encrypted)
-				if err != nil {
-					glog.Fatalf("main | repo.Push [%s]", err)
-				}
-			}
-		}
-
-		if *poolingOption == "pull" {
-			synced, err := repo.Pull(cfg.Root.Encrypted)
-			if err != nil {
-				glog.Fatalf("main | repo.Pull [%s]", err)
-			}
-
-			if !synced {
-				glog.Infoln("remote updated")
-
-				storage, err = sqlite.New(cfg.Secret.State)
-				if err != nil {
-					glog.Fatalf("main | sqlite.New [%s]", err)
-				}
-
-				ff, err := storage.Files()
-				if err != nil {
-					glog.Fatalf("main | storage.Files [%s]", err)
-				}
-
-				for _, f := range ff {
-					if _, err := os.Stat(f.Name); os.IsNotExist(err) {
-						err = crypto.Decrypt([]byte(cfg.Secret.Key), f.Name, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, f.Obfuscated))
-						if err != nil {
-							glog.Fatalf("main | crypto.Decrypt [%s]", err)
-						}
-					}
-
-					md5sum, err := crypto.MD5(f.Name)
-					if err != nil {
-						glog.Fatalf("main | crypto.MD5 [%s]", err)
-					}
-					if f.MD5 != md5sum {
-						err = crypto.Decrypt([]byte(cfg.Secret.Key), f.Name, fmt.Sprintf("%s/%s", cfg.Root.Encrypted, f.Obfuscated))
-						if err != nil {
-							glog.Fatalf("main | crypto.Decrypt [%s]", err)
-						}
-					}
-				}
-			} else {
-				glog.Infoln("remote unchanged")
-			}
-		}
-
-		glog.V(2).Infoln("state close")
-		err = storage.Close()
-		if err != nil {
-			glog.Fatalf("main | storage.Close [%s]", err)
-		}
+func main() {
+	switch *poolingOption {
+	case "restore":
+		restore()
+	case "pull":
+		pull()
+	default:
+		push()
 	}
 }
