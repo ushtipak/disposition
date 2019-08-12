@@ -1,23 +1,23 @@
 package main
 
 import (
-	"../../pkg/crypto"
-	"../../pkg/files"
-	"../../pkg/files/sqlite"
-	"../../pkg/repo"
 	"flag"
 	"fmt"
 	"github.com/golang/glog"
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/ushtipak/disposition/pkg/crypto"
+	"github.com/ushtipak/disposition/pkg/files"
+	"github.com/ushtipak/disposition/pkg/files/sqlite"
+	"github.com/ushtipak/disposition/pkg/repo"
 	"gopkg.in/yaml.v2"
 	"os"
 	"path/filepath"
 )
 
 var (
-	cfg           Config
-	cfgFile       = flag.String("conf", "/opt/disposition/disposition.yml", "path to config file")
+	cfg     Config
+	cfgFile = flag.String("conf", "/opt/disposition/disposition.yml", "path to config file")
 	// amoeba speak
 	poolingOption = flag.String("pooling-option", "push", "which method should be invoked (push / pull / restore)")
 	restorePath   = flag.String("restore-to", "/tmp/disposition", "restoration dir")

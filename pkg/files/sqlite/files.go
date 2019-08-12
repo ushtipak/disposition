@@ -1,9 +1,9 @@
 package sqlite
 
 import (
-	"../../files"
 	"fmt"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/ushtipak/disposition/pkg/files"
 )
 
 var _ files.Storage = Storage{}
