@@ -3,8 +3,8 @@ package repo
 import (
 	"github.com/golang/glog"
 	"github.com/google/uuid"
+	"gopkg.in/src-d/go-git.v4"
 	"os/exec"
-	"strings"
 )
 
 func Push(root string) (err error) {
@@ -35,16 +35,24 @@ func Push(root string) (err error) {
 }
 
 func Pull(root string) (updated bool, err error) {
-	cmd := exec.Command("/usr/bin/git", "pull")
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
+	r, err := git.PlainOpen(root)
 	if err != nil {
 		return
 	}
-	glog.V(2).Infof("exec %s:\n%s", cmd.Args, string(out))
-
-	if strings.Contains(string(out), "Already up to date.") {
-		updated = true
+	w, err := r.Worktree()
+	if err != nil {
+		return
 	}
+
+	err = w.Pull(&git.PullOptions{RemoteName: "origin"})
+	if err != nil {
+		if err == git.NoErrAlreadyUpToDate {
+			return updated, nil
+		} else {
+			return
+		}
+	}
+
+	updated = true
 	return
 }
