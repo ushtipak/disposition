@@ -17,7 +17,7 @@ import (
 
 var (
 	cfg           Config
-	cfgFile       = "/opt/disposition/disposition.yml"
+	cfgFile       = flag.String("conf", "/opt/disposition/disposition.yml", "path to config file")
 	// amoeba speak
 	poolingOption = flag.String("pooling-option", "push", "which method should be invoked (push / pull / restore)")
 	restorePath   = flag.String("restore-to", "/tmp/disposition", "restoration dir")
@@ -90,7 +90,7 @@ func init() {
 
 	glog.Infof("pooling option [%v]", *poolingOption)
 
-	f, err := os.Open(cfgFile)
+	f, err := os.Open(*cfgFile)
 	if err != nil {
 		glog.Fatalf("init | os.Open [%s]", err)
 	}
