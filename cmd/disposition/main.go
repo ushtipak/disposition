@@ -204,7 +204,7 @@ func push() {
 			log.Fatalf("push | crypto.Encrypt [%s]", err)
 		}
 
-		err = repo.Push(cfg.Root.Encrypted)
+		err = repo.Push(cfg.Root.Encrypted, *debug)
 		if err != nil {
 			log.Fatalf("push | repo.Push [%s]", err)
 		}
@@ -219,7 +219,7 @@ func push() {
 
 // if there are changes on remote - decrypt and update state
 func pull() {
-	synced, err := repo.Pull(cfg.Root.Encrypted)
+	synced, err := repo.Pull(cfg.Root.Encrypted, *debug)
 	if err != nil {
 		log.Fatalf("pull | repo.Pull [%s]", err)
 	}
