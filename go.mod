@@ -6,5 +6,5 @@ require (
 	github.com/mattn/go-sqlite3 v1.11.0
 	github.com/sirupsen/logrus v1.4.2
 	google.golang.org/appengine v1.6.1 // indirect
-	gopkg.in/yaml.v2 v2.2.4
+	gopkg.in/yaml.v2 v2.4.0
 )
